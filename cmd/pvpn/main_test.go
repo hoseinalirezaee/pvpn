@@ -54,8 +54,14 @@ func TestNewServerRules(t *testing.T) {
 	if code, _, _ := runCLI("reconcile", "--new-server"); code != exitUsage {
 		t.Errorf("--new-server belongs to rotate only: %d", code)
 	}
-	if _, out, _ := runCLI("--help"); !strings.Contains(out, "--new-server") || !strings.Contains(out, "--new-ip") {
-		t.Error("usage does not mention --new-server and --new-ip")
+	if _, out, _ := runCLI("--help"); !strings.Contains(out, "--new-server") || !strings.Contains(out, "--new-ip") || !strings.Contains(out, "--new-key") {
+		t.Error("usage does not mention --new-key, --new-ip, and --new-server")
+	}
+	if code, _, errb := runCLI("rotate"); code != exitUsage || !strings.Contains(errb, "say what to rotate") {
+		t.Errorf("rotate without a flag: %d %q", code, errb)
+	}
+	if code, _, errb := runCLI("rotate", "--group", "g"); code != exitUsage || !strings.Contains(errb, "say what to rotate") {
+		t.Errorf("rotate --group without a change flag: %d %q", code, errb)
 	}
 	if code, _, _ := runCLI("reconcile", "--new-ip"); code != exitUsage {
 		t.Errorf("--new-ip belongs to rotate only: %d", code)

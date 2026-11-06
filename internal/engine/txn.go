@@ -241,6 +241,74 @@ func (e *Engine) rotateMember(ctx context.Context, name string, newSrc netip.Add
 	return e.finishMember(ctx, op)
 }
 
+// switchMemberIP gives one running interface a new source address and keeps its key and certificate.
+// The address and the route are already in place (rotateBatch did that with one netplan apply).
+// WireGuard keeps the source address of its peer, so the UDP socket is replaced (a new listen port) and the
+// peer endpoint is set again. Both calls leave the key alone. The tunnel must pass the traffic probe.
+func (e *Engine) switchMemberIP(ctx context.Context, name string, newSrc netip.Addr) error {
+	it := e.st.Interfaces[name]
+	g := e.st.Groups[it.Group]
+	conf, err := e.Sys.ReadWG(name)
+	if err != nil {
+		return err
+	}
+	priv := render.ParseWG(conf).PrivateKey
+	peer, err := netip.ParseAddr(g.EntryIPv6)
+	if err != nil {
+		return fmt.Errorf("%s: bad server address %q", name, g.EntryIPv6)
+	}
+
+	t := &state.Txn{Kind: state.TxnRotate, Phase: state.TxnPrepared, Group: it.Group}
+	op := e.st.AddOp(&state.Op{Kind: state.OpTxn, Txn: t, Note: "new source of " + name})
+	if err := e.save(); err != nil {
+		return err
+	}
+	backup, err := e.backupConf(name, op.ID)
+	if err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	old := *it
+	nw := old
+	nw.SourceIP = newSrc.String() // the key and the certificate stay
+	t.Members = []state.TxnMember{{Iface: name, Old: old, New: nw, WasActive: true, Backup: backup}}
+	t.Phase = state.TxnStaged
+	if err := e.save(); err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	e.logf("%s: new source address (old %s, new %s), same key", name, old.SourceIP, newSrc)
+
+	port, err := e.Sys.FreePort(ctx)
+	if err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	if err := e.Sys.WGSetListenPort(ctx, name, port); err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	if err := e.Sys.WGSetPeerEndpoint(ctx, name, g.PublicKey, netip.AddrPortFrom(peer, 51820)); err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	// The handshake of the old key is still valid. Only the traffic probe proves that the tunnel works.
+	if err := e.validateTunnel(ctx, name, &t.Members[0].New, time.Time{}); err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+
+	text, err := e.wgText(name, &t.Members[0].New, g, priv)
+	if err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	if err := e.Sys.WriteWG(name, text); err != nil {
+		return e.abortTxn(ctx, op, err)
+	}
+	nn := t.Members[0].New
+	nn.Phase, nn.ValidatedAt, nn.AppliedGen = state.PhaseReady, e.Clock.Now().UTC(), e.st.Generation
+	e.st.Interfaces[name] = &nn
+	t.Phase = state.TxnCommitted
+	if err := e.save(); err != nil {
+		return err
+	}
+	return e.finishMember(ctx, op)
+}
+
 // finishMember revokes the old certificate right after the new tunnel works. This keeps the number of
 // sessions at the Proton servers low. The netplan cleanup belongs to the batch (settleBatch).
 func (e *Engine) finishMember(ctx context.Context, op *state.Op) error {
@@ -339,7 +407,7 @@ func (e *Engine) rollbackRotate(ctx context.Context, t *state.Txn) []error {
 		if tm.Backup != "" {
 			if b, err := os.ReadFile(tm.Backup); err == nil {
 				meta := render.ParseWG(string(b))
-				if st, err := e.Sys.WGStatus(ctx, tm.Iface); err == nil && st.Exists && st.PublicKey == tm.New.WGPublicKey && meta.PrivateKey != "" {
+				if st, err := e.Sys.WGStatus(ctx, tm.Iface); err == nil && st.Exists && st.PublicKey == tm.New.WGPublicKey && tm.New.WGPublicKey != tm.Old.WGPublicKey && meta.PrivateKey != "" {
 					if err := e.Sys.WGSetKey(ctx, tm.Iface, meta.PrivateKey, 0); err != nil {
 						errs = append(errs, fmt.Errorf("restore key of %s: %w", tm.Iface, err))
 					}

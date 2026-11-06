@@ -415,6 +415,12 @@ func (r *Real) WGSetListenPort(ctx context.Context, iface string, port int) erro
 	return err
 }
 
+// WGSetPeerEndpoint sets the endpoint of the (only) peer again. This clears the source address that WireGuard kept.
+func (r *Real) WGSetPeerEndpoint(ctx context.Context, iface, peerKey string, ep netip.AddrPort) error {
+	_, err := r.Run.Run(ctx, nil, "wg", "set", iface, "peer", peerKey, "endpoint", ep.String())
+	return err
+}
+
 func redactKey(s, key string) string {
 	if key == "" {
 		return s

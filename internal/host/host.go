@@ -98,6 +98,9 @@ type System interface {
 	WGStatus(ctx context.Context, iface string) (WGStatus, error)
 	WGSetKey(ctx context.Context, iface, privateKey string, listenPort int) error
 	WGSetListenPort(ctx context.Context, iface string, port int) error
+	// WGSetPeerEndpoint sets the endpoint of the peer again. WireGuard then forgets the source address
+	// that it kept for the peer and takes it from the routing table again.
+	WGSetPeerEndpoint(ctx context.Context, iface, peerKey string, ep netip.AddrPort) error
 	FreePort(ctx context.Context) (int, error)
 	// WarmSource sends a few small UDP packets from src to dst:51820. A new source address is then known
 	// on the path before the first handshake.

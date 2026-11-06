@@ -11,7 +11,8 @@
 #   first      first reconcile: 2 groups, 4 interfaces
 #   idempotent a second reconcile does nothing
 #   restart    systemctl restart keeps the source address (checked on the wire)
-#   rotate     rotate one interface, one group, all
+#   rotate     rotate key, certificate, and IP: one interface, one group, all
+#   iprotate   rotate only the IP (same key and certificate); the new source is checked on the wire
 #   rotfail    rotation fails (UDP from the candidate address is blocked) and rolls back
 #   replace    group server replacement
 #   prune      remove one interface from the config
@@ -276,7 +277,7 @@ sc_rotate() {
   oldsrc=$(field $n source_ip); oldserial=$(field $n cert_serial); oldkey=$(field $n wg_public_key)
   oth=$(sha256sum /etc/wireguard/pvpn-de2.conf /etc/wireguard/pvpn-nl1.conf /etc/wireguard/pvpn-nl2.conf | sha256sum)
   started1=$(systemctl show wg-quick@$n -p ActiveEnterTimestampMonotonic)
-  pvpn_run rotate --interface $n; rc=$?
+  pvpn_run rotate --new-key --new-ip --interface $n; rc=$?
   eq "rotate exits with 0" "$rc" "0"
   ne "source address changed" "$(field $n source_ip)" "$oldsrc"
   ne "certificate changed" "$(field $n cert_serial)" "$oldserial"
@@ -289,14 +290,42 @@ sc_rotate() {
   consistent
 
   say "rotate one group"
-  pvpn_run rotate --group netherlands; eq "rotate --group exits with 0" "$?" "0"
+  pvpn_run rotate --new-key --new-ip --group netherlands; eq "rotate --group exits with 0" "$?" "0"
   consistent
 
   say "rotate all"
   local before; before=$(serials)
-  pvpn_run rotate; eq "rotate (all) exits with 0" "$?" "0"
+  pvpn_run rotate --new-key --new-ip; eq "rotate (all) exits with 0" "$?" "0"
   eq "all certificates changed" "$(comm -12 <(echo "$before") <(serials) | wc -l)" "0"
-  pvpn rotate --group germany --interface pvpn-de1 >/dev/null 2>&1; eq "--group with --interface is refused (exit 2)" "$?" "2"
+  pvpn rotate --new-key --group germany --interface pvpn-de1 >/dev/null 2>&1; eq "--group with --interface is refused (exit 2)" "$?" "2"
+  pvpn rotate >/dev/null 2>&1; eq "rotate without a flag is refused (exit 2)" "$?" "2"
+  pvpn rotate --new-server --interface pvpn-de1 >/dev/null 2>&1; eq "--new-server with --interface is refused (exit 2)" "$?" "2"
+  consistent
+  safety_off
+}
+
+sc_iprotate() {
+  say "rotate only the IP"
+  safety_on 900
+  local n=pvpn-de1 oldsrc oldserial oldkey newsrc seen rc oth
+  oldsrc=$(field $n source_ip); oldserial=$(field $n cert_serial); oldkey=$(field $n wg_public_key)
+  oth=$(wg show pvpn-nl1 latest-handshakes | awk '{print $2}')
+  pvpn_run rotate --new-ip --interface $n; rc=$?
+  eq "rotate --new-ip exits with 0" "$rc" "0"
+  newsrc=$(field $n source_ip)
+  ne "source address changed" "$newsrc" "$oldsrc"
+  eq "certificate did not change" "$(field $n cert_serial)" "$oldserial"
+  eq "key did not change" "$(field $n wg_public_key)" "$oldkey"
+  eq "live key is the saved key" "$(wg show $n public-key)" "$oldkey"
+  eq "old source address is gone from eth0" "$(ip -6 addr show dev eth0 | grep -c "$oldsrc")" "0"
+  eq "certificate is still at the API" "$(certs_all | grep -c "serial=$oldserial ")" "1"
+  eq "WireGuard file has the new source" "$(grep -c "addr change $newsrc/128" /etc/wireguard/$n.conf)" "1"
+  # The new source must be used on the wire. A persistent keepalive leaves every 25 s.
+  seen=$(outer_sources $n 35 sleep 33)
+  echo "  outer source addresses seen on the wire: $seen"
+  t  "outer packets used the new source address" bash -c "echo '$seen' | grep -qx '$newsrc'"
+  eq "no outer packet used the old source address" "$(echo "$seen" | grep -c "$oldsrc")" "0"
+  t  "another tunnel kept running (its handshake did not go backwards)" test "$(wg show pvpn-nl1 latest-handshakes | awk '{print $2}')" -ge "$oth"
   consistent
   safety_off
 }
@@ -309,7 +338,7 @@ sc_rotfail() {
   oldconf=$(sha256sum /etc/wireguard/$n.conf); oldnp=$(sha256sum /etc/netplan/90-pvpn.yaml)
   known=$(ip -6 -br addr show dev eth0 | tr ' ' '\n' | grep "^$SUBNET" | sed 's#/.*##' | sort)
   nft delete table inet pvpntest >/dev/null 2>&1
-  ( pvpn rotate --interface $n > "$ACC/rotfail.txt" 2>&1; echo $? > "$ACC/rotfail.rc" ) &
+  ( pvpn rotate --new-key --new-ip --interface $n > "$ACC/rotfail.txt" 2>&1; echo $? > "$ACC/rotfail.rc" ) &
   local bgpid=$!
   for i in $(seq 1 600); do
     cand=$(comm -13 <(echo "$known") <(ip -6 -br addr show dev eth0 | tr ' ' '\n' | grep "^$SUBNET" | sed 's#/.*##' | sort) | head -1)
@@ -396,7 +425,7 @@ sc_chaos() {
   local i d rc
   for i in 1 2 3 4; do
     d=$(( (RANDOM % 9) + 1 ))
-    timeout -s KILL "$d" pvpn rotate --interface pvpn-de2 >/dev/null 2>&1; rc=$?
+    timeout -s KILL "$d" pvpn rotate --new-key --new-ip --interface pvpn-de2 >/dev/null 2>&1; rc=$?
     echo "  run $i: killed after ${d}s (rc=$rc); pending=$(js "len(s['pending'])")"
     pvpn reconcile >"$ACC/chaos-$i.txt" 2>&1; echo "    recovery reconcile rc=$?"
   done

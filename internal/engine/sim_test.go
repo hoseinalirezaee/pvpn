@@ -168,7 +168,7 @@ func (s *sim) lastIndex(prefix string) int {
 	return -1
 }
 
-var mutating = []string{"CreateCert", "DeleteCert", "NetplanApply", "EnsureAddr", "DelAddr", "WGSetKey", "WGSetListenPort",
+var mutating = []string{"CreateCert", "DeleteCert", "NetplanApply", "EnsureAddr", "DelAddr", "WGSetKey", "WGSetListenPort", "WGSetPeerEndpoint",
 	"WriteWG", "RemoveWG", "UnitStart", "UnitStop", "UnitEnable", "UnitDisable", "WriteDropIn", "RemoveDropIn"}
 
 func (s *sim) mutations() int {
@@ -391,6 +391,17 @@ func (s *sim) WGSetListenPort(ctx context.Context, iface string, port int) error
 		}
 		l.port, l.needHS = port, true
 		l.attempts++
+		return nil
+	})
+}
+
+func (s *sim) WGSetPeerEndpoint(ctx context.Context, iface, peerKey string, ep netip.AddrPort) error {
+	return s.mut("WGSetPeerEndpoint", func() error {
+		l, ok := s.links[iface]
+		if !ok {
+			return host.ErrLinkMissing
+		}
+		l.endpoint = ep.String()
 		return nil
 	})
 }

@@ -11,13 +11,15 @@ import (
 )
 
 // RotateSel selects what to rotate. Group and Interface exclude each other. Empty means all.
-// By default a rotation gives each member a new key and certificate and keeps its source IP.
-// With NewIP, the members also get a new source IP.
-// With NewServer, each selected group also moves to another server. NewServer and Interface exclude each other.
-// A group move gives new keys and certificates, so NewServer without NewIP rotates nothing more.
+// The flags are independent. At least one must be set.
+//   - NewKey: a new key and certificate for each member.
+//   - NewIP: a new source IP for each member.
+//   - NewServer: each selected group moves to another server. A certificate is made for one server,
+//     so this always gives new keys and certificates. NewServer and Interface exclude each other.
 type RotateSel struct {
 	Group     string
 	Interface string
+	NewKey    bool
 	NewIP     bool
 	NewServer bool
 }
@@ -28,7 +30,7 @@ type rotation struct {
 	members []string
 }
 
-// Rotate gives interfaces a new key and certificate. With sel.NewIP it also gives them a new source address.
+// Rotate changes what sel asks for: the key and certificate, the source address, and the server.
 // With sel.NewServer, each group first moves to another server of the same filters.
 // It stops at the first failure. The caller holds the exclusive state lock.
 func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
@@ -37,6 +39,9 @@ func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
 	}
 	if sel.NewServer && sel.Interface != "" {
 		return errors.New("--new-server cannot be used with --interface (a server belongs to a group)")
+	}
+	if !sel.NewKey && !sel.NewIP && !sel.NewServer {
+		return errors.New("say what to rotate: --new-key, --new-ip, or --new-server")
 	}
 	if e.st == nil {
 		if err := e.Load(); err != nil {
@@ -90,10 +95,12 @@ func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
 			}
 			moved = name
 		}
-		if sel.NewServer && !sel.NewIP {
-			continue // the group move already gave every member a new key and certificate
+		// A group move already gave every member a new key and certificate.
+		newKey := sel.NewKey && !sel.NewServer
+		if !newKey && !sel.NewIP {
+			continue
 		}
-		if err := e.rotateBatch(ctx, r.group, r.members, sel.NewIP); err != nil {
+		if err := e.rotateBatch(ctx, r.group, r.members, newKey, sel.NewIP); err != nil {
 			var rs *rotateStop
 			if moved != "" && errors.As(err, &rs) {
 				return fmt.Errorf("rotation stopped at %s (group %s is already on the new server %s; run `pvpn rotate --group %s` again): %w", rs.iface, r.group, moved, r.group, rs.err)

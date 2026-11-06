@@ -18,7 +18,7 @@ type rotateStop struct {
 func (s *rotateStop) Error() string { return fmt.Sprintf("rotation stopped at %s: %v", s.iface, s.err) }
 func (s *rotateStop) Unwrap() error { return s.err }
 
-// rotateBatch rotates the members of one group (or one interface).
+// rotateBatch rotates the members of one group (or one interface). At least one of newKey and newIP is set.
 // Without newIP, each member only gets a new key and certificate. It keeps its source address, so nothing
 // changes in netplan: after the check, the members rotate one after another (step 4 below).
 // With newIP, the steps are:
@@ -27,13 +27,14 @@ func (s *rotateStop) Unwrap() error { return s.err }
 //  2. One netplan apply adds all new addresses and switches all routes to them. The old addresses stay.
 //     The apply waits until every address is active (the kernel checks them in parallel).
 //  3. Warm all new sources at once.
-//  4. Rotate the members one after another: new key, certificate, handshake, probe, new file and state,
-//     and the old certificate is revoked at once.
+//  4. Change the members one after another. With newKey: new key, certificate, handshake, probe, new file
+//     and state, and the old certificate is revoked at once. Without newKey (IP only): the key stays and
+//     WireGuard is made to use the new source (switchMemberIP).
 //  5. One netplan apply removes the old addresses (settleBatch).
 //
 // It stops at the first failure. Members before it stay rotated. The failed member and the members after it
 // keep their old key, address, and route.
-func (e *Engine) rotateBatch(ctx context.Context, group string, names []string, newIP bool) error {
+func (e *Engine) rotateBatch(ctx context.Context, group string, names []string, newKey, newIP bool) error {
 	for _, n := range names {
 		if err := e.precheckRotate(ctx, n); err != nil {
 			return &rotateStop{n, err}
@@ -115,7 +116,13 @@ func (e *Engine) rotateBatch(ctx context.Context, group string, names []string, 
 	}
 
 	for _, n := range names {
-		if err := e.rotateMember(ctx, n, srcs[n]); err != nil {
+		var err error
+		if newKey {
+			err = e.rotateMember(ctx, n, srcs[n])
+		} else {
+			err = e.switchMemberIP(ctx, n, srcs[n])
+		}
+		if err != nil {
 			return e.settleAfter(ctx, op, &rotateStop{n, err})
 		}
 		e.logf("%s: rotated", n)

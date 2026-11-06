@@ -37,10 +37,12 @@ Commands:
   servers [--group G]           List the servers that match the group filters.
   status                        Show selections, interface health, certificate expiry, pending work.
   reconcile [--dry-run]         Make the managed resources match the config.
-  rotate [--group G | --interface I] [--new-ip] [--new-server]
-                                Give interfaces a new key and certificate (the source IP stays).
-                                With --new-ip, they also get a new source IP.
-                                With --new-server, each group also moves to another server (not with --interface).
+  rotate [--group G | --interface I] [--new-key] [--new-ip] [--new-server]
+                                Change what you ask for. At least one flag is required; they can be combined.
+                                --new-key     new key and certificate
+                                --new-ip      new source IP
+                                --new-server  each group moves to another server (not with --interface);
+                                              this always gives new keys and certificates
   version                       Print the version.
 
 Every command accepts --config PATH (default ` + defaultConfig + `).
@@ -77,7 +79,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", defaultConfig, "config file")
 	var group, iface *string
-	var dry, newIP, newServer *bool
+	var dry, newKey, newIP, newServer *bool
 	switch cmd {
 	case "servers":
 		group = fs.String("group", "", "only this group")
@@ -86,7 +88,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "rotate":
 		group = fs.String("group", "", "rotate the interfaces of this group")
 		iface = fs.String("interface", "", "rotate this interface")
-		newIP = fs.Bool("new-ip", false, "also give the interfaces a new source IP")
+		newKey = fs.Bool("new-key", false, "give the interfaces a new key and certificate")
+		newIP = fs.Bool("new-ip", false, "give the interfaces a new source IP")
 		newServer = fs.Bool("new-server", false, "also move each group to another server that matches its filters")
 	case "login", "logout", "status":
 	default:
@@ -102,6 +105,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if cmd == "rotate" && *group != "" && *iface != "" {
 		fmt.Fprintln(stderr, "pvpn: --group and --interface cannot be used together")
+		return exitUsage
+	}
+	if cmd == "rotate" && !*newKey && !*newIP && !*newServer {
+		fmt.Fprintln(stderr, "pvpn: say what to rotate: --new-key, --new-ip, or --new-server")
 		return exitUsage
 	}
 	if cmd == "rotate" && *newServer && *iface != "" {
@@ -134,7 +141,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "reconcile":
 		err = a.reconcile(ctx, *dry)
 	case "rotate":
-		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface, NewIP: *newIP, NewServer: *newServer})
+		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface, NewKey: *newKey, NewIP: *newIP, NewServer: *newServer})
 	}
 	switch {
 	case err == nil:

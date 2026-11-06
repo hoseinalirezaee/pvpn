@@ -438,3 +438,16 @@ func TestWarmSourcesSendsThreeRoundsToEveryPair(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWGSetPeerEndpointCommand(t *testing.T) {
+	fr := &fakeRunner{}
+	fr.on("wg set", func(string) ([]byte, error) { return nil, nil })
+	r := newReal(t, fr)
+	ep := netip.AddrPortFrom(netip.MustParseAddr("2001:db8::1"), 51820)
+	if err := r.WGSetPeerEndpoint(context.Background(), "pvpn-de1", "PEERKEY=", ep); err != nil {
+		t.Fatal(err)
+	}
+	if len(fr.calls) != 1 || fr.calls[0] != "wg set pvpn-de1 peer PEERKEY= endpoint [2001:db8::1]:51820" {
+		t.Errorf("calls: %q", fr.calls)
+	}
+}
