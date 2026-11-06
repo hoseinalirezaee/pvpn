@@ -86,14 +86,12 @@ func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
 			}
 			moved = name
 		}
-		for _, n := range r.members {
-			if err := e.rotateMember(ctx, n); err != nil {
-				if moved != "" {
-					return fmt.Errorf("rotation stopped at %s (group %s is already on the new server %s; run `pvpn rotate --group %s` again): %w", n, r.group, moved, r.group, err)
-				}
-				return fmt.Errorf("rotation stopped at %s: %w", n, err)
+		if err := e.rotateBatch(ctx, r.group, r.members); err != nil {
+			var rs *rotateStop
+			if moved != "" && errors.As(err, &rs) {
+				return fmt.Errorf("rotation stopped at %s (group %s is already on the new server %s; run `pvpn rotate --group %s` again): %w", rs.iface, r.group, moved, r.group, rs.err)
 			}
-			e.logf("%s: rotated", n)
+			return err
 		}
 	}
 	return nil

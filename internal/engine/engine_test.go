@@ -568,11 +568,11 @@ func TestRotateOneInterface(t *testing.T) {
 	if _, ok := w.s.certs[a.CertSerial]; ok {
 		t.Error("old certificate not revoked")
 	}
-	// Order: two netplan applies (candidate, route switch) before the key change, one cleanup after it.
-	if n := w.s.count("NetplanApply"); n != 3 {
+	// Order: one netplan apply (new address and route) before the key change, one cleanup after it.
+	if n := w.s.count("NetplanApply"); n != 2 {
 		t.Errorf("netplan applies: %d", n)
 	}
-	if w.s.index("WGSetKey") < w.s.index("NetplanApply") || w.s.count("UnitStop")+w.s.count("UnitStart") != 0 {
+	if w.s.index("WGSetKey") < w.s.index("NetplanApply") || w.s.lastIndex("NetplanApply") < w.s.index("WGSetKey") || w.s.count("UnitStop")+w.s.count("UnitStart") != 0 {
 		t.Errorf("unexpected order or restart: %v", w.s.calls)
 	}
 	// The old certificate is revoked only after the new tunnel works.
@@ -1176,4 +1176,150 @@ func TestExcludeFreeMovesTheGroup(t *testing.T) {
 		t.Fatalf("group is on %s, want the paid server DE#2", got)
 	}
 	w.assertConsistent()
+}
+
+// ---- group-wide rotation ----
+
+// callIndexes returns the positions of the calls that start with prefix.
+func (w *world) callIndexes(prefix string) []int {
+	var out []int
+	for i, c := range w.s.calls {
+		if strings.HasPrefix(c, prefix) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func TestRotateGroupBatch(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.calls = nil
+	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.loadState()
+	// Two netplan applies for the whole group: new addresses and routes first, old addresses removed last.
+	if n := w.s.count("NetplanApply"); n != 2 {
+		t.Errorf("netplan applies: %d, want 2", n)
+	}
+	if w.s.count("WarmSources") != 1 {
+		t.Errorf("WarmSources calls: %d", w.s.count("WarmSources"))
+	}
+	applies, keys := w.callIndexes("NetplanApply"), w.callIndexes("WGSetKey")
+	if len(keys) != 2 || applies[0] > keys[0] || applies[1] < keys[1] {
+		t.Errorf("apply/key order wrong: %v", w.s.calls)
+	}
+	for _, n := range []string{"pvpn-de1", "pvpn-de2"} {
+		a, b := before.Interfaces[n], st.Interfaces[n]
+		if a.SourceIP == b.SourceIP || a.CertSerial == b.CertSerial || a.WGPublicKey == b.WGPublicKey {
+			t.Errorf("%s: not fully rotated", n)
+		}
+		if a.Table != b.Table || a.Mark != b.Mark || a.Priority != b.Priority {
+			t.Errorf("%s: identifiers changed", n)
+		}
+		if _, ok := w.s.addrs[netip.MustParseAddr(a.SourceIP)]; ok {
+			t.Errorf("%s: old address still present", n)
+		}
+		if _, ok := w.s.certs[a.CertSerial]; ok {
+			t.Errorf("%s: old certificate not revoked", n)
+		}
+	}
+	if st.Interfaces["pvpn-de1"].SourceIP == st.Interfaces["pvpn-de2"].SourceIP {
+		t.Error("members share a source address")
+	}
+	// The sessions at the server stay low: the first old certificate is revoked after the first
+	// tunnel works and before the second certificate is made.
+	creates, deletes, probes := w.callIndexes("CreateCert"), w.callIndexes("DeleteCert"), w.callIndexes("Probe:pvpn-de1")
+	if len(creates) != 2 || len(deletes) != 2 || len(probes) == 0 {
+		t.Fatalf("calls: %v", w.s.calls)
+	}
+	if !(probes[0] < deletes[0] && deletes[0] < creates[1]) {
+		t.Errorf("old certificate of the first member must go after its probe and before the next certificate is made: %v", w.s.calls)
+	}
+	for _, n := range []string{"pvpn-nl1", "pvpn-nl2"} {
+		if st.Interfaces[n].CertSerial != before.Interfaces[n].CertSerial {
+			t.Errorf("%s changed", n)
+		}
+	}
+	w.assertConsistent()
+}
+
+func TestRotateBatchPrecheckChangesNothing(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.units["pvpn-de2"].active = false
+	w.s.calls = nil
+	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"})
+	if err == nil || !strings.Contains(err.Error(), "pvpn-de2: unit is not running") {
+		t.Fatalf("got %v", err)
+	}
+	if w.s.count("CreateCert") != 0 || w.s.count("NetplanApply") != 0 || w.s.count("WGSetKey") != 0 {
+		t.Errorf("a failed precheck changed something: %v", w.s.calls)
+	}
+	if st := w.loadState(); st.Interfaces["pvpn-de1"].CertSerial != before.Interfaces["pvpn-de1"].CertSerial || len(st.Pending) != 0 {
+		t.Error("state changed")
+	}
+}
+
+func TestRotateBatchStopsAtFirstFailure(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.probeFail["pvpn-de2"] = errors.New("probe: no traffic")
+	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"})
+	if err == nil || !strings.Contains(err.Error(), "stopped at pvpn-de2") {
+		t.Fatalf("got %v", err)
+	}
+	delete(w.s.probeFail, "pvpn-de2")
+	st := w.loadState()
+	a, b := before.Interfaces["pvpn-de1"], st.Interfaces["pvpn-de1"]
+	if a.SourceIP == b.SourceIP || a.CertSerial == b.CertSerial {
+		t.Error("the first member should have rotated")
+	}
+	a, b = before.Interfaces["pvpn-de2"], st.Interfaces["pvpn-de2"]
+	if a.SourceIP != b.SourceIP || a.CertSerial != b.CertSerial {
+		t.Error("the failed member must keep its old source address and certificate")
+	}
+	w.assertConsistent() // no stray address or route, no leaked certificate
+}
+
+func TestCrashDuringGroupRotation(t *testing.T) {
+	runCrashMatrix(t, "rotate group", func(w *world) { w.mustReconcile() },
+		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}) },
+		func(w *world) error { _, err := w.reconcile(); return err })
+}
+
+func TestPortRetryDefaultIsOneSecond(t *testing.T) {
+	if got := newWorld(t).engine().PortRetry; got != time.Second {
+		t.Errorf("PortRetry = %s", got)
+	}
+}
+
+func TestRotateBatchDeletesStickyAddresses(t *testing.T) {
+	w := newWorld(t)
+	w.s.stickyAddr = true // netplan does not remove addresses; only the direct delete does
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.calls = nil
+	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := w.s.count("DelAddr"); n != 2 {
+		t.Errorf("direct address deletes: %d, want 2 (one old address per member): %v", n, w.s.calls)
+	}
+	for _, n := range []string{"pvpn-de1", "pvpn-de2"} {
+		if _, ok := w.s.addrs[netip.MustParseAddr(before.Interfaces[n].SourceIP)]; ok {
+			t.Errorf("%s: old address still present", n)
+		}
+	}
+	w.assertConsistent()
+}
+
+func TestCrashDuringGroupRotationWithStickyAddresses(t *testing.T) {
+	runCrashMatrix(t, "rotate group (sticky addresses)", func(w *world) { w.s.stickyAddr = true; w.mustReconcile() },
+		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}) },
+		func(w *world) error { _, err := w.reconcile(); return err })
 }

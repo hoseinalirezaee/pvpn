@@ -36,21 +36,41 @@ func (r *Real) FreePort(ctx context.Context) (int, error) {
 // WarmSource sends three small UDP packets from src to dst:51820. WireGuard drops them as invalid.
 // The packets make the network learn the new source address before the first handshake.
 func (r *Real) WarmSource(ctx context.Context, src, dst netip.Addr) error {
-	d := net.Dialer{LocalAddr: &net.UDPAddr{IP: src.AsSlice()}, Timeout: 2 * time.Second}
-	c, err := d.DialContext(ctx, "udp6", net.JoinHostPort(dst.String(), "51820"))
-	if err != nil {
-		return err
+	return r.WarmSources(ctx, []WarmPair{{src, dst}})
+}
+
+// WarmSources warms several sources at once. It sends one packet for every pair, waits 300 ms,
+// and repeats this three times. So the time does not grow with the number of pairs.
+func (r *Real) WarmSources(ctx context.Context, pairs []WarmPair) error {
+	var conns []net.Conn
+	defer func() {
+		for _, c := range conns {
+			c.Close()
+		}
+	}()
+	var first error
+	for _, p := range pairs {
+		d := net.Dialer{LocalAddr: &net.UDPAddr{IP: p.Src.AsSlice()}, Timeout: 2 * time.Second}
+		c, err := d.DialContext(ctx, "udp6", net.JoinHostPort(p.Dst.String(), "51820"))
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			continue
+		}
+		conns = append(conns, c)
 	}
-	defer c.Close()
-	for i := 0; i < 3; i++ {
-		if _, err := c.Write([]byte{0xff, byte(i)}); err != nil {
-			return err
+	for i := 0; i < 3 && len(conns) > 0; i++ {
+		for _, c := range conns {
+			if _, err := c.Write([]byte{0xff, byte(i)}); err != nil && first == nil {
+				first = err
+			}
 		}
 		if err := r.Clock.Sleep(ctx, 300*time.Millisecond); err != nil {
 			return err
 		}
 	}
-	return nil
+	return first
 }
 
 // Probe sends HTTPS requests that can leave only through the interface.

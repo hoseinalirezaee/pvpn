@@ -20,18 +20,22 @@ func (e *Engine) Recover(ctx context.Context) error {
 	var errs []error
 
 	// 1. Transactions first. They put the state and the host back in a known shape.
-	for _, op := range append([]*state.Op(nil), e.st.Pending...) {
-		if op.Kind != state.OpTxn || op.Txn == nil {
-			continue
-		}
-		var err error
-		if op.Txn.Phase == state.TxnCommitted {
-			err = e.finishTxn(ctx, op)
-		} else {
-			err = e.rollbackTxn(ctx, op)
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("transaction %s: %w", op.Note, err))
+	// Member transactions come before the batch that wraps them. The batch removes addresses
+	// only after the members have decided which addresses the state owns.
+	for _, batch := range []bool{false, true} {
+		for _, op := range append([]*state.Op(nil), e.st.Pending...) {
+			if op.Kind != state.OpTxn || op.Txn == nil || (op.Txn.Kind == state.TxnRotateBatch) != batch {
+				continue
+			}
+			var err error
+			if op.Txn.Phase == state.TxnCommitted {
+				err = e.finishTxn(ctx, op)
+			} else {
+				err = e.rollbackTxn(ctx, op)
+			}
+			if err != nil {
+				errs = append(errs, fmt.Errorf("transaction %s: %w", op.Note, err))
+			}
 		}
 	}
 	if len(errs) > 0 {

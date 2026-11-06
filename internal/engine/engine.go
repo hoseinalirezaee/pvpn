@@ -58,7 +58,7 @@ func New(cfg *config.Config, store *state.Store, api API, sys host.System) *Engi
 	return &Engine{
 		Cfg: cfg, Store: store, API: api, Sys: sys, Clock: host.RealClock{},
 		NewCred: proton.NewCredential, Logf: func(string, ...any) {},
-		AddrWait: 10 * time.Second, Validate: 30 * time.Second, PortRetry: 4 * time.Second,
+		AddrWait: 10 * time.Second, Validate: 30 * time.Second, PortRetry: 1 * time.Second,
 		keys: map[string]string{},
 	}
 }

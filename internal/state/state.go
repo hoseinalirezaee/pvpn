@@ -102,6 +102,9 @@ const (
 	TxnRotate  = "rotate"  // new key, cert, and source address; same server
 	TxnRenew   = "renew"   // new key and cert; same source address and server
 	TxnReplace = "replace" // new server for a group; new keys and certs; same source addresses
+	// TxnRotateBatch wraps the rotation of the members of one group. It holds only the source addresses.
+	// Its recovery rebuilds the netplan file from the state and removes the addresses that nothing owns.
+	TxnRotateBatch = "rotate_batch"
 
 	TxnPrepared  = "prepared"  // new certs exist; nothing changed on the host
 	TxnStaged    = "staged"    // candidate resources exist on the host

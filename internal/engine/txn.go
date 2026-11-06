@@ -144,12 +144,10 @@ func (e *Engine) groupTxn(ctx context.Context, kind, gname string, newG *state.G
 
 // ---- rotation of one interface ----
 
-// rotateMember gives one running interface a new key, certificate, and source address.
-// The server stays the same. The tunnel is updated in place.
-func (e *Engine) rotateMember(ctx context.Context, name string) error {
+// precheckRotate checks that an interface can be rotated. It changes nothing.
+func (e *Engine) precheckRotate(ctx context.Context, name string) error {
 	it := e.st.Interfaces[name]
-	g := e.st.Groups[it.Group]
-	if it == nil || g == nil {
+	if it == nil || e.st.Groups[it.Group] == nil {
 		return fmt.Errorf("%s: not managed by pvpn", name)
 	}
 	if it.Phase != state.PhaseReady {
@@ -167,6 +165,15 @@ func (e *Engine) rotateMember(ctx context.Context, name string) error {
 	if m := render.ParseWG(conf); !m.Managed || m.PrivateKey == "" {
 		return fmt.Errorf("%s: WireGuard file is not a pvpn file with a key (run `pvpn reconcile`)", name)
 	}
+	return nil
+}
+
+// rotateMember gives one running interface a new key and certificate. Its source address is newSrc.
+// The address and the route are already in place (rotateBatch did that with one netplan apply).
+// The server stays the same. The tunnel is updated in place. The caller settles the netplan file.
+func (e *Engine) rotateMember(ctx context.Context, name string, newSrc netip.Addr) error {
+	it := e.st.Interfaces[name]
+	g := e.st.Groups[it.Group]
 
 	t := &state.Txn{Kind: state.TxnRotate, Phase: state.TxnPrepared, Group: it.Group}
 	op := e.st.AddOp(&state.Op{Kind: state.OpTxn, Txn: t, Note: "rotate " + name})
@@ -174,10 +181,6 @@ func (e *Engine) rotateMember(ctx context.Context, name string) error {
 		return err
 	}
 	backup, err := e.backupConf(name, op.ID)
-	if err != nil {
-		return e.abortTxn(ctx, op, err)
-	}
-	newSrc, err := e.newSource(ctx)
 	if err != nil {
 		return e.abortTxn(ctx, op, err)
 	}
@@ -201,30 +204,9 @@ func (e *Engine) rotateMember(ctx context.Context, name string) error {
 	if err := e.save(); err != nil {
 		return e.abortTxn(ctx, op, err)
 	}
-	oldAddr, _ := netip.ParseAddr(old.SourceIP)
-	e.logf("%s: rotating (old source %s, new source %s)", name, oldAddr, newSrc)
+	e.logf("%s: rotating (old source %s, new source %s)", name, old.SourceIP, newSrc)
 
-	// A: add the candidate address, keep the old address and route.
-	ovA := map[string]override{name: {addrs: []netip.Addr{oldAddr, newSrc}, from: oldAddr}}
-	if err := e.syncNetplan(ctx, ovA, true); err != nil {
-		return e.abortTxn(ctx, op, err)
-	}
-	mA, _ := e.member(name, &old)
-	mA.Addrs = ovA[name].addrs
-	if err := e.checkMember(ctx, name, mA.Addrs, mA); err != nil {
-		return e.abortTxn(ctx, op, err)
-	}
-	// B: switch the source route to the candidate address.
-	ovB := map[string]override{name: {addrs: []netip.Addr{oldAddr, newSrc}, from: newSrc}}
-	if err := e.syncNetplan(ctx, ovB, true); err != nil {
-		return e.abortTxn(ctx, op, err)
-	}
-	mB := mA
-	mB.From = newSrc
-	if err := e.checkMember(ctx, name, mB.Addrs, mB); err != nil {
-		return e.abortTxn(ctx, op, err)
-	}
-	// C: new key and a new listen port on the running interface. Then require a fresh handshake and a probe.
+	// New key and a new listen port on the running interface. Then require a fresh handshake and a probe.
 	e.warm(ctx, nw.SourceIP, g)
 	port, err := e.Sys.FreePort(ctx)
 	if err != nil {
@@ -253,7 +235,21 @@ func (e *Engine) rotateMember(ctx context.Context, name string) error {
 	if err := e.save(); err != nil {
 		return err
 	}
-	return e.finishTxn(ctx, op)
+	return e.finishMember(ctx, op)
+}
+
+// finishMember revokes the old certificate right after the new tunnel works. This keeps the number of
+// sessions at the Proton servers low. The netplan cleanup belongs to the batch (settleBatch).
+func (e *Engine) finishMember(ctx context.Context, op *state.Op) error {
+	t := op.Txn
+	for _, tm := range t.Members {
+		if tm.Old.CertSerial != "" && tm.Old.CertSerial != tm.New.CertSerial {
+			_ = e.DeleteOwnedCert(ctx, tm.Old.CertSerial) // failure leaves a journal entry
+		}
+	}
+	removeBackups(t)
+	e.st.RemoveOp(op.ID)
+	return e.save()
 }
 
 // ---- finish and rollback ----
@@ -261,6 +257,9 @@ func (e *Engine) rotateMember(ctx context.Context, name string) error {
 // finishTxn runs the cleanup after the commit. It is safe to run more than once.
 func (e *Engine) finishTxn(ctx context.Context, op *state.Op) error {
 	t := op.Txn
+	if t.Kind == state.TxnRotateBatch {
+		return e.settleBatch(ctx, op)
+	}
 	var errs []error
 	if t.Kind == state.TxnRotate {
 		if err := e.syncNetplan(ctx, nil, false); err != nil {
@@ -301,6 +300,9 @@ func (e *Engine) abortTxn(ctx context.Context, op *state.Op, cause error) error 
 // It removes only the resources that this transaction made.
 func (e *Engine) rollbackTxn(ctx context.Context, op *state.Op) error {
 	t := op.Txn
+	if t.Kind == state.TxnRotateBatch {
+		return e.settleBatch(ctx, op) // the state decides which addresses stay
+	}
 	var errs []error
 	if t.Phase != state.TxnPrepared {
 		switch t.Kind {

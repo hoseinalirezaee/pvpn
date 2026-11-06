@@ -400,6 +400,11 @@ func (s *sim) WarmSource(ctx context.Context, src, dst netip.Addr) error {
 	return nil
 }
 
+func (s *sim) WarmSources(ctx context.Context, pairs []host.WarmPair) error {
+	s.calls = append(s.calls, "WarmSources")
+	return nil
+}
+
 func (s *sim) FreePort(ctx context.Context) (int, error) {
 	s.ports++
 	return s.ports, nil

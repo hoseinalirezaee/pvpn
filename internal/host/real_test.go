@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -406,5 +407,34 @@ func TestProbeSetupAndCleanup(t *testing.T) {
 	last := fr.calls[len(fr.calls)-1]
 	if last != "ip -4 route flush table 5751" || fr.called("ip -4 rule del priority 101 oif pvpn-de1 lookup 5751") == 0 {
 		t.Fatalf("cleanup missing: %v", fr.calls)
+	}
+}
+
+func TestWarmSourcesSendsThreeRoundsToEveryPair(t *testing.T) {
+	pc, err := net.ListenPacket("udp6", "[::1]:51820")
+	if err != nil {
+		t.Skipf("cannot listen on [::1]:51820: %v", err)
+	}
+	defer pc.Close()
+	r := newReal(t, &fakeRunner{})
+	lo := netip.MustParseAddr("::1")
+	if err := r.WarmSources(context.Background(), []WarmPair{{lo, lo}, {lo, lo}}); err != nil {
+		t.Fatal(err)
+	}
+	got := 0
+	buf := make([]byte, 16)
+	for {
+		_ = pc.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		if _, _, err := pc.ReadFrom(buf); err != nil {
+			break
+		}
+		got++
+	}
+	if got != 6 { // 2 pairs x 3 rounds
+		t.Fatalf("packets: %d, want 6", got)
+	}
+	// An empty list is not an error and sends nothing.
+	if err := r.WarmSources(context.Background(), nil); err != nil {
+		t.Fatal(err)
 	}
 }

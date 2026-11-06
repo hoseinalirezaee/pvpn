@@ -29,6 +29,9 @@ type DeviceRef struct {
 }
 
 // WGStatus is the live state of a WireGuard interface.
+// WarmPair is one source and destination for WarmSources.
+type WarmPair struct{ Src, Dst netip.Addr }
+
 type WGStatus struct {
 	Exists     bool
 	PublicKey  string // own public key
@@ -99,6 +102,8 @@ type System interface {
 	// WarmSource sends a few small UDP packets from src to dst:51820. A new source address is then known
 	// on the path before the first handshake.
 	WarmSource(ctx context.Context, src, dst netip.Addr) error
+	// WarmSources does the same for several pairs at once (the packets go out in rounds).
+	WarmSources(ctx context.Context, pairs []WarmPair) error
 	// Probe sends an HTTPS request through the interface only. It returns the exit IP the target saw.
 	Probe(ctx context.Context, iface string, table, prio int) (string, error)
 	ProbeCleanup(ctx context.Context, iface string, table, prio int) error
