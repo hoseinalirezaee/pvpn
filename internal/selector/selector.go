@@ -73,6 +73,15 @@ type stage struct {
 
 func feat(l *proton.Logical, bit int) bool { return l.Features&bit != 0 }
 
+// Features returns the feature bits of a logical server. A free-tier server (Tier 0) also has config.FeatFree.
+func Features(l *proton.Logical) int {
+	f := l.Features
+	if l.Tier == 0 {
+		f |= config.FeatFree
+	}
+	return f
+}
+
 func (f Filter) stages(ignoreLoad bool) []stage {
 	forbid := f.Forbid
 	// Tor and Secure Core servers are separate products. A group gets them only when it asks for them.
@@ -108,7 +117,8 @@ func (f Filter) stages(ignoreLoad bool) []stage {
 		stage{"account tier", func(l *proton.Logical, _ *proton.Physical) bool { return l.Tier <= f.MaxTier }},
 		stage{"IPv6 endpoint and key", func(_ *proton.Logical, p *proton.Physical) bool { return validEndpoint(p) }},
 		stage{"features", func(l *proton.Logical, _ *proton.Physical) bool {
-			return l.Features&f.Require == f.Require && l.Features&forbid == 0
+			feats := Features(l)
+			return feats&f.Require == f.Require && feats&forbid == 0
 		}},
 	)
 	if f.MaxLoad > 0 && !ignoreLoad {

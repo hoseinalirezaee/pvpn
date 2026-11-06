@@ -1154,3 +1154,26 @@ func TestCrashDuringNewServerRotation(t *testing.T) {
 		},
 		func(w *world) error { _, err := w.reconcile(); return err })
 }
+
+// ---- the free feature ----
+
+func TestExcludeFreeMovesTheGroup(t *testing.T) {
+	w := newWorld(t)
+	w.s.logicals[0].Tier = 0 // DE#1 (load 30) is a free server
+	w.mustReconcile()
+	if got := w.loadState().Groups["germany"].Logical; got != "DE#1" {
+		t.Fatalf("free servers are eligible by default: group is on %s", got)
+	}
+	if p := w.mustReconcile(); !p.Empty() {
+		t.Fatalf("second reconcile:\n%s", p)
+	}
+	w.setConfig(strings.Replace(testYAML, "exclude_features: [tor, secure_core]", "exclude_features: [tor, secure_core, free]", 1))
+	p := w.mustReconcile()
+	if len(p.Actions) != 1 || p.Actions[0].Kind != "replace-server" {
+		t.Fatalf("plan:\n%s", p)
+	}
+	if got := w.loadState().Groups["germany"].Logical; got != "DE#2" {
+		t.Fatalf("group is on %s, want the paid server DE#2", got)
+	}
+	w.assertConsistent()
+}

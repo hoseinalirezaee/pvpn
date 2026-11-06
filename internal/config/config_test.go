@@ -149,3 +149,26 @@ groups: {a: {server: {country: XX1, select: z}, interfaces: [a, a]}}
 		}
 	}
 }
+
+func TestFreeFeatureNames(t *testing.T) {
+	doc := func(req, excl string) string {
+		return "version: 1\ndefaults:\n  source:\n    device: eth0\n    gateway: fe80::1\n    subnets: [\"2001:db8::/64\"]\n" +
+			"groups:\n  g:\n    server:\n      country: DE\n      require_features: " + req + "\n      exclude_features: " + excl + "\n    interfaces: [a1]\n"
+	}
+	cfg, err := Parse([]byte(doc("[p2p]", "[free]")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := cfg.Groups["g"].Server; g.Forbid != FeatFree || g.Require != FeatP2P {
+		t.Errorf("masks: require %d forbid %d", g.Require, g.Forbid)
+	}
+	if _, err := Parse([]byte(doc("[free]", "[]"))); err != nil {
+		t.Errorf("require free: %v", err)
+	}
+	if _, err := Parse([]byte(doc("[free]", "[free]"))); err == nil || !strings.Contains(err.Error(), "share free") {
+		t.Errorf("free in both lists: %v", err)
+	}
+	if _, err := Parse([]byte(doc("[streaming]", "[]"))); err == nil || !strings.Contains(err.Error(), "allowed: p2p, tor, secure_core, free") {
+		t.Errorf("unknown feature text: %v", err)
+	}
+}

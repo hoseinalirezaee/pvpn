@@ -23,9 +23,11 @@ const (
 	FeatSecureCore = 1
 	FeatTor        = 2
 	FeatP2P        = 4
+	// FeatFree is not a Proton feature bit. The selector sets it for free-tier servers (Tier 0).
+	FeatFree = 1 << 30
 )
 
-var featureBits = map[string]int{"p2p": FeatP2P, "tor": FeatTor, "secure_core": FeatSecureCore}
+var featureBits = map[string]int{"p2p": FeatP2P, "tor": FeatTor, "secure_core": FeatSecureCore, "free": FeatFree}
 
 type Config struct {
 	Version   int               `yaml:"version"`
@@ -242,7 +244,7 @@ func featureMask(list []string) (int, error) {
 		bit, ok := featureBits[f]
 		switch {
 		case !ok:
-			return 0, fmt.Errorf("unknown feature %q (allowed: p2p, tor, secure_core)", f)
+			return 0, fmt.Errorf("unknown feature %q (allowed: p2p, tor, secure_core, free)", f)
 		case seen[f]:
 			return 0, fmt.Errorf("feature %q is listed twice", f)
 		}

@@ -330,7 +330,7 @@ func (a *app) servers(ctx context.Context, only string) error {
 				mark = "*"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\t%s\t%s\n", mark, c.Logical.Name, c.Logical.City, c.Logical.Load, c.Logical.Tier,
-				features(c.Logical.Features), c.Server.Domain, c.Server.EntryIPv6)
+				features(selector.Features(c.Logical)), c.Server.Domain, c.Server.EntryIPv6)
 		}
 		tw.Flush()
 		fmt.Fprintln(a.out)
@@ -344,7 +344,7 @@ func features(f int) string {
 	for _, x := range []struct {
 		bit  int
 		name string
-	}{{config.FeatSecureCore, "secure_core"}, {config.FeatTor, "tor"}, {config.FeatP2P, "p2p"}} {
+	}{{config.FeatSecureCore, "secure_core"}, {config.FeatTor, "tor"}, {config.FeatP2P, "p2p"}, {config.FeatFree, "free"}} {
 		if f&x.bit != 0 {
 			out = append(out, x.name)
 		}

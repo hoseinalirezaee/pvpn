@@ -63,4 +63,7 @@ func TestFeaturesText(t *testing.T) {
 	if features(0) != "-" || features(4|16) != "p2p" || features(1|2|4) != "secure_core,tor,p2p" {
 		t.Errorf("features: %q %q %q", features(0), features(4|16), features(7))
 	}
+	if got := features(4 | 1<<30); got != "p2p,free" {
+		t.Errorf("free: %q", got)
+	}
 }

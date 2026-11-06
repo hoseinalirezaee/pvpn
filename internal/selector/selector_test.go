@@ -217,3 +217,25 @@ func TestWithout(t *testing.T) {
 		t.Fatal("empty input")
 	}
 }
+
+func TestFreeFeature(t *testing.T) {
+	ls := world()
+	if Features(&ls[6])&config.FeatFree == 0 || Features(&ls[0])&config.FeatFree != 0 { // DE#6 is tier 0, DE#1 is tier 2
+		t.Fatal("only tier 0 servers are free")
+	}
+	if ls[6].Features&config.FeatFree != 0 {
+		t.Fatal("the synthetic bit must never be written to the server data")
+	}
+	all, _ := Match(ls, Filter{Country: "DE", City: "Frankfurt", MaxTier: 2}, false)
+	if !strings.Contains(names(all), "DE#6@m7") {
+		t.Fatalf("free servers are eligible by default: %s", names(all))
+	}
+	paid, _ := Match(ls, Filter{Country: "DE", City: "Frankfurt", MaxTier: 2, Forbid: config.FeatFree}, false)
+	if strings.Contains(names(paid), "DE#6") || len(paid) != len(all)-1 {
+		t.Fatalf("free servers must go: %s", names(paid))
+	}
+	only, _ := Match(ls, Filter{Country: "DE", MaxTier: 2, Require: config.FeatFree}, false)
+	if names(only) != "DE#6@m7" {
+		t.Fatalf("require free: %s", names(only))
+	}
+}
