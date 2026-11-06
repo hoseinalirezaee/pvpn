@@ -19,6 +19,9 @@ func (s *rotateStop) Error() string { return fmt.Sprintf("rotation stopped at %s
 func (s *rotateStop) Unwrap() error { return s.err }
 
 // rotateBatch rotates the members of one group (or one interface).
+// Without newIP, each member only gets a new key and certificate. It keeps its source address, so nothing
+// changes in netplan: after the check, the members rotate one after another (step 4 below).
+// With newIP, the steps are:
 //
 //  1. Check every member. A problem stops everything before any change.
 //  2. One netplan apply adds all new addresses and switches all routes to them. The old addresses stay.
@@ -30,11 +33,24 @@ func (s *rotateStop) Unwrap() error { return s.err }
 //
 // It stops at the first failure. Members before it stay rotated. The failed member and the members after it
 // keep their old key, address, and route.
-func (e *Engine) rotateBatch(ctx context.Context, group string, names []string) error {
+func (e *Engine) rotateBatch(ctx context.Context, group string, names []string, newIP bool) error {
 	for _, n := range names {
 		if err := e.precheckRotate(ctx, n); err != nil {
 			return &rotateStop{n, err}
 		}
+	}
+	if !newIP {
+		for _, n := range names {
+			src, err := netip.ParseAddr(e.st.Interfaces[n].SourceIP)
+			if err != nil {
+				return &rotateStop{n, fmt.Errorf("bad saved source address %q", e.st.Interfaces[n].SourceIP)}
+			}
+			if err := e.rotateMember(ctx, n, src); err != nil {
+				return &rotateStop{n, err}
+			}
+			e.logf("%s: rotated", n)
+		}
+		return nil
 	}
 
 	t := &state.Txn{Kind: state.TxnRotateBatch, Phase: state.TxnPrepared, Group: group}

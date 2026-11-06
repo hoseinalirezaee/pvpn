@@ -540,7 +540,7 @@ func TestRotateOneInterface(t *testing.T) {
 		others[n] = w.s.wg[n]
 	}
 	w.s.calls = nil
-	if err := w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-de1"}); err != nil {
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Interface: "pvpn-de1"}); err != nil {
 		t.Fatal(err)
 	}
 	st := w.loadState()
@@ -589,7 +589,7 @@ func TestRotateFailureRestoresEverything(t *testing.T) {
 	oldConf := w.s.wg["pvpn-de1"]
 	oldNetplan := string(w.s.managed)
 	w.s.probeFail["pvpn-de1"] = errors.New("probe: no traffic")
-	err := w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-de1"})
+	err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Interface: "pvpn-de1"})
 	if err == nil || !strings.Contains(err.Error(), "pvpn-de1") {
 		t.Fatalf("got %v", err)
 	}
@@ -647,7 +647,7 @@ func TestRotateAddressFailureLeavesOldConfigUsable(t *testing.T) {
 			}
 			serial := w.iface("pvpn-nl1").CertSerial
 			inject(w, known)
-			err := w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-nl1"})
+			err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Interface: "pvpn-nl1"})
 			if err == nil {
 				t.Fatal("rotation must fail")
 			}
@@ -936,7 +936,9 @@ func TestCrashDuringFirstReconcile(t *testing.T) {
 
 func TestCrashDuringRotation(t *testing.T) {
 	runCrashMatrix(t, "rotate", func(w *world) { w.mustReconcile() },
-		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-de1"}) },
+		func(w *world) error {
+			return w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Interface: "pvpn-de1"})
+		},
 		func(w *world) error { _, err := w.reconcile(); return err })
 }
 
@@ -998,7 +1000,9 @@ var _ = sort.Strings
 
 func TestCrashDuringRotationRollback(t *testing.T) {
 	runCrashMatrix(t, "rotate rollback", func(w *world) { w.mustReconcile(); w.s.probeFail["pvpn-de1"] = errors.New("probe: no traffic") },
-		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-de1"}) },
+		func(w *world) error {
+			return w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Interface: "pvpn-de1"})
+		},
 		func(w *world) error { delete(w.s.probeFail, "pvpn-de1"); _, err := w.reconcile(); return err })
 }
 
@@ -1025,7 +1029,7 @@ func TestRotateNewServer(t *testing.T) {
 	w.mustReconcile()
 	before := w.loadState()
 	w.s.calls = nil
-	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true}); err != nil {
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany", NewServer: true}); err != nil {
 		t.Fatal(err)
 	}
 	st := w.loadState()
@@ -1077,7 +1081,7 @@ func TestRotateNewServerAllGroups(t *testing.T) {
 	w := newWorld(t)
 	w.mustReconcile()
 	before := w.loadState()
-	if err := w.engine().Rotate(context.Background(), RotateSel{NewServer: true}); err != nil {
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, NewServer: true}); err != nil {
 		t.Fatal(err)
 	}
 	st := w.loadState()
@@ -1150,7 +1154,7 @@ func TestRotateNewServerRejectsInterface(t *testing.T) {
 func TestCrashDuringNewServerRotation(t *testing.T) {
 	runCrashMatrix(t, "rotate --new-server", func(w *world) { w.mustReconcile() },
 		func(w *world) error {
-			return w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true})
+			return w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany", NewServer: true})
 		},
 		func(w *world) error { _, err := w.reconcile(); return err })
 }
@@ -1196,7 +1200,7 @@ func TestRotateGroupBatch(t *testing.T) {
 	w.mustReconcile()
 	before := w.loadState()
 	w.s.calls = nil
-	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}); err != nil {
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany"}); err != nil {
 		t.Fatal(err)
 	}
 	st := w.loadState()
@@ -1269,7 +1273,7 @@ func TestRotateBatchStopsAtFirstFailure(t *testing.T) {
 	w.mustReconcile()
 	before := w.loadState()
 	w.s.probeFail["pvpn-de2"] = errors.New("probe: no traffic")
-	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"})
+	err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany"})
 	if err == nil || !strings.Contains(err.Error(), "stopped at pvpn-de2") {
 		t.Fatalf("got %v", err)
 	}
@@ -1288,7 +1292,9 @@ func TestRotateBatchStopsAtFirstFailure(t *testing.T) {
 
 func TestCrashDuringGroupRotation(t *testing.T) {
 	runCrashMatrix(t, "rotate group", func(w *world) { w.mustReconcile() },
-		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}) },
+		func(w *world) error {
+			return w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany"})
+		},
 		func(w *world) error { _, err := w.reconcile(); return err })
 }
 
@@ -1304,7 +1310,7 @@ func TestRotateBatchDeletesStickyAddresses(t *testing.T) {
 	w.mustReconcile()
 	before := w.loadState()
 	w.s.calls = nil
-	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}); err != nil {
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany"}); err != nil {
 		t.Fatal(err)
 	}
 	if n := w.s.count("DelAddr"); n != 2 {
@@ -1320,6 +1326,114 @@ func TestRotateBatchDeletesStickyAddresses(t *testing.T) {
 
 func TestCrashDuringGroupRotationWithStickyAddresses(t *testing.T) {
 	runCrashMatrix(t, "rotate group (sticky addresses)", func(w *world) { w.s.stickyAddr = true; w.mustReconcile() },
+		func(w *world) error {
+			return w.engine().Rotate(context.Background(), RotateSel{NewIP: true, Group: "germany"})
+		},
+		func(w *world) error { _, err := w.reconcile(); return err })
+}
+
+// ---- rotation without a new IP (the default) ----
+
+func TestRotateKeepsIPsByDefault(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	oldNetplan := string(w.s.managed)
+	w.s.calls = nil
+	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.loadState()
+	for _, c := range []string{"NetplanApply", "WarmSource", "UnitStop", "UnitStart", "DelAddr"} {
+		if n := w.s.count(c); n != 0 {
+			t.Errorf("%s was called %d times: %v", c, n, w.s.calls)
+		}
+	}
+	if string(w.s.managed) != oldNetplan {
+		t.Error("the netplan file changed")
+	}
+	for _, n := range []string{"pvpn-de1", "pvpn-de2"} {
+		a, b := before.Interfaces[n], st.Interfaces[n]
+		if a.SourceIP != b.SourceIP || a.Table != b.Table || a.Mark != b.Mark || a.Priority != b.Priority {
+			t.Errorf("%s: the source address or the identifiers changed", n)
+		}
+		if a.CertSerial == b.CertSerial || a.WGPublicKey == b.WGPublicKey {
+			t.Errorf("%s: no new key or certificate", n)
+		}
+		if _, ok := w.s.certs[a.CertSerial]; ok {
+			t.Errorf("%s: old certificate not revoked", n)
+		}
+	}
+	// The old certificate of the first member goes before the second certificate is made.
+	creates, deletes, probes := w.callIndexes("CreateCert"), w.callIndexes("DeleteCert"), w.callIndexes("Probe:pvpn-de1")
+	if len(creates) != 2 || len(deletes) != 2 || len(probes) == 0 || !(probes[0] < deletes[0] && deletes[0] < creates[1]) {
+		t.Errorf("order of probe, revoke, and create: %v", w.s.calls)
+	}
+	for _, n := range []string{"pvpn-nl1", "pvpn-nl2"} {
+		if st.Interfaces[n].CertSerial != before.Interfaces[n].CertSerial {
+			t.Errorf("%s changed", n)
+		}
+	}
+	w.assertConsistent()
+}
+
+func TestRotateKeyOnlyFailureRestores(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	oldConf2, oldNetplan := w.s.wg["pvpn-de2"], string(w.s.managed)
+	w.s.probeFail["pvpn-de2"] = errors.New("probe: no traffic")
+	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany"})
+	if err == nil || !strings.Contains(err.Error(), "stopped at pvpn-de2") {
+		t.Fatalf("got %v", err)
+	}
+	delete(w.s.probeFail, "pvpn-de2")
+	st := w.loadState()
+	if st.Interfaces["pvpn-de1"].CertSerial == before.Interfaces["pvpn-de1"].CertSerial {
+		t.Error("the first member should have rotated")
+	}
+	if st.Interfaces["pvpn-de2"].CertSerial != before.Interfaces["pvpn-de2"].CertSerial || w.s.wg["pvpn-de2"] != oldConf2 {
+		t.Error("the failed member must keep its old key, file, and certificate")
+	}
+	if string(w.s.managed) != oldNetplan {
+		t.Error("the netplan file changed")
+	}
+	w.assertConsistent()
+}
+
+func TestCrashDuringKeyOnlyRotation(t *testing.T) {
+	runCrashMatrix(t, "rotate group (key only)", func(w *world) { w.mustReconcile() },
 		func(w *world) error { return w.engine().Rotate(context.Background(), RotateSel{Group: "germany"}) },
 		func(w *world) error { _, err := w.reconcile(); return err })
+}
+
+func TestRotateNewServerKeepsIPs(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.calls = nil
+	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.loadState()
+	if got := st.Groups["germany"].Logical; got != "DE#2" {
+		t.Fatalf("group is on %s, want DE#2", got)
+	}
+	for _, n := range []string{"pvpn-de1", "pvpn-de2"} {
+		a, b := before.Interfaces[n], st.Interfaces[n]
+		if a.SourceIP != b.SourceIP {
+			t.Errorf("%s: the source address changed", n)
+		}
+		if a.CertSerial == b.CertSerial || a.WGPublicKey == b.WGPublicKey {
+			t.Errorf("%s: no new key or certificate", n)
+		}
+	}
+	// The group move makes the new keys. No second rotation follows, so there are exactly 2 certificates.
+	if n := w.s.count("CreateCert"); n != 2 {
+		t.Errorf("certificates made: %d, want 2", n)
+	}
+	if n := w.s.count("NetplanApply"); n != 0 {
+		t.Errorf("netplan applies: %d", n)
+	}
+	w.assertConsistent()
 }

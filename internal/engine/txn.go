@@ -169,7 +169,8 @@ func (e *Engine) precheckRotate(ctx context.Context, name string) error {
 }
 
 // rotateMember gives one running interface a new key and certificate. Its source address is newSrc.
-// The address and the route are already in place (rotateBatch did that with one netplan apply).
+// When newSrc is a new address, the address and the route are already in place (rotateBatch did that
+// with one netplan apply). When newSrc is the saved address, nothing changes in netplan.
 // The server stays the same. The tunnel is updated in place. The caller settles the netplan file.
 func (e *Engine) rotateMember(ctx context.Context, name string, newSrc netip.Addr) error {
 	it := e.st.Interfaces[name]
@@ -207,7 +208,9 @@ func (e *Engine) rotateMember(ctx context.Context, name string, newSrc netip.Add
 	e.logf("%s: rotating (old source %s, new source %s)", name, old.SourceIP, newSrc)
 
 	// New key and a new listen port on the running interface. Then require a fresh handshake and a probe.
-	e.warm(ctx, nw.SourceIP, g)
+	if nw.SourceIP != old.SourceIP { // an address that is already in use is known on the path
+		e.warm(ctx, nw.SourceIP, g)
+	}
 	port, err := e.Sys.FreePort(ctx)
 	if err != nil {
 		return e.abortTxn(ctx, op, err)

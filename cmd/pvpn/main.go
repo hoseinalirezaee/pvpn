@@ -37,8 +37,9 @@ Commands:
   servers [--group G]           List the servers that match the group filters.
   status                        Show selections, interface health, certificate expiry, pending work.
   reconcile [--dry-run]         Make the managed resources match the config.
-  rotate [--group G | --interface I] [--new-server]
-                                Give interfaces a new key, certificate, and source address.
+  rotate [--group G | --interface I] [--new-ip] [--new-server]
+                                Give interfaces a new key and certificate (the source IP stays).
+                                With --new-ip, they also get a new source IP.
                                 With --new-server, each group also moves to another server (not with --interface).
   version                       Print the version.
 
@@ -76,7 +77,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", defaultConfig, "config file")
 	var group, iface *string
-	var dry, newServer *bool
+	var dry, newIP, newServer *bool
 	switch cmd {
 	case "servers":
 		group = fs.String("group", "", "only this group")
@@ -85,6 +86,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "rotate":
 		group = fs.String("group", "", "rotate the interfaces of this group")
 		iface = fs.String("interface", "", "rotate this interface")
+		newIP = fs.Bool("new-ip", false, "also give the interfaces a new source IP")
 		newServer = fs.Bool("new-server", false, "also move each group to another server that matches its filters")
 	case "login", "logout", "status":
 	default:
@@ -132,7 +134,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "reconcile":
 		err = a.reconcile(ctx, *dry)
 	case "rotate":
-		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface, NewServer: *newServer})
+		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface, NewIP: *newIP, NewServer: *newServer})
 	}
 	switch {
 	case err == nil:

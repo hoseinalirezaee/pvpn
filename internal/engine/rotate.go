@@ -11,10 +11,14 @@ import (
 )
 
 // RotateSel selects what to rotate. Group and Interface exclude each other. Empty means all.
+// By default a rotation gives each member a new key and certificate and keeps its source IP.
+// With NewIP, the members also get a new source IP.
 // With NewServer, each selected group also moves to another server. NewServer and Interface exclude each other.
+// A group move gives new keys and certificates, so NewServer without NewIP rotates nothing more.
 type RotateSel struct {
 	Group     string
 	Interface string
+	NewIP     bool
 	NewServer bool
 }
 
@@ -24,8 +28,8 @@ type rotation struct {
 	members []string
 }
 
-// Rotate gives interfaces a new key, certificate, and source address, one after another.
-// With sel.NewServer, each group first moves to another server of the same filters, then its members rotate.
+// Rotate gives interfaces a new key and certificate. With sel.NewIP it also gives them a new source address.
+// With sel.NewServer, each group first moves to another server of the same filters.
 // It stops at the first failure. The caller holds the exclusive state lock.
 func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
 	if sel.Group != "" && sel.Interface != "" {
@@ -86,7 +90,10 @@ func (e *Engine) Rotate(ctx context.Context, sel RotateSel) error {
 			}
 			moved = name
 		}
-		if err := e.rotateBatch(ctx, r.group, r.members); err != nil {
+		if sel.NewServer && !sel.NewIP {
+			continue // the group move already gave every member a new key and certificate
+		}
+		if err := e.rotateBatch(ctx, r.group, r.members, sel.NewIP); err != nil {
 			var rs *rotateStop
 			if moved != "" && errors.As(err, &rs) {
 				return fmt.Errorf("rotation stopped at %s (group %s is already on the new server %s; run `pvpn rotate --group %s` again): %w", rs.iface, r.group, moved, r.group, rs.err)
