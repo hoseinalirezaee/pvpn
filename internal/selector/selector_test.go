@@ -206,3 +206,14 @@ func TestRevalidateKeepsAndDetectsChange(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+func TestWithout(t *testing.T) {
+	cands, _ := Match(world(), Filter{Country: "DE", Require: config.FeatP2P, City: "Frankfurt", MaxTier: 2}, false)
+	got := Without(cands, "DE#2")
+	if strings.Contains(names(got), "DE#2") || !strings.Contains(names(got), "DE#1@m1") || len(got) != len(cands)-2 {
+		t.Fatalf("both machines of DE#2 must go, the others stay: %s", names(got))
+	}
+	if len(Without(nil, "x")) != 0 {
+		t.Fatal("empty input")
+	}
+}

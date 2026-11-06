@@ -230,3 +230,14 @@ func SameEndpoint(saved *state.Group, c Candidate) bool {
 	return saved.Logical == c.Logical.Name && saved.Domain == c.Server.Domain &&
 		saved.EntryIPv6 == c.Server.EntryIPv6 && saved.PublicKey == c.Server.X25519PublicKey && saved.Label == c.Server.Label
 }
+
+// Without returns the candidates that are not on the named logical server.
+func Without(cands []Candidate, logical string) []Candidate {
+	out := make([]Candidate, 0, len(cands))
+	for _, c := range cands {
+		if c.Logical.Name != logical {
+			out = append(out, c)
+		}
+	}
+	return out
+}

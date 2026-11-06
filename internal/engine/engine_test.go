@@ -1017,3 +1017,140 @@ func TestCrashDuringReplacementRollback(t *testing.T) {
 			return err
 		})
 }
+
+// ---- rotate --new-server ----
+
+func TestRotateNewServer(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.s.calls = nil
+	if err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.loadState()
+	// DE#1 is the saved server. Only DE#2 passes the filters (DE#3 is in Berlin, DE#4 is above max_load).
+	if got := st.Groups["germany"].Logical; got != "DE#2" {
+		t.Fatalf("group is on %s, want DE#2", got)
+	}
+	for _, n := range []string{"pvpn-de1", "pvpn-de2"} {
+		a, b := before.Interfaces[n], st.Interfaces[n]
+		if a.SourceIP == b.SourceIP || a.CertSerial == b.CertSerial || a.WGPublicKey == b.WGPublicKey {
+			t.Errorf("%s: not fully rotated: %+v -> %+v", n, a, b)
+		}
+		if a.Table != b.Table || a.Mark != b.Mark || a.Priority != b.Priority {
+			t.Errorf("%s: identifiers changed", n)
+		}
+		if _, ok := w.s.addrs[netip.MustParseAddr(a.SourceIP)]; ok {
+			t.Errorf("%s: old address still present", n)
+		}
+		if _, ok := w.s.certs[a.CertSerial]; ok {
+			t.Errorf("%s: old certificate not revoked", n)
+		}
+	}
+	// The server change stops every old member before any member starts. The rotation after it works in place.
+	if w.s.lastIndex("UnitStop") > w.s.index("UnitStart") {
+		t.Errorf("a unit started before all old members stopped: %v", w.s.calls)
+	}
+	if w.s.count("UnitStop") != 2 || w.s.count("UnitStart") != 2 {
+		t.Errorf("stops/starts: %v", w.s.calls)
+	}
+	if w.s.lastIndex("UnitStart") > w.s.index("NetplanApply") {
+		t.Errorf("source rotation must follow the server change: %v", w.s.calls)
+	}
+	for _, n := range []string{"pvpn-nl1", "pvpn-nl2"} {
+		if st.Interfaces[n].CertSerial != before.Interfaces[n].CertSerial {
+			t.Errorf("%s changed", n)
+		}
+	}
+	if st.Groups["netherlands"].Logical != before.Groups["netherlands"].Logical {
+		t.Error("netherlands moved")
+	}
+	w.assertConsistent()
+	// The next reconcile keeps the new server.
+	if p := w.mustReconcile(); !p.Empty() {
+		t.Errorf("reconcile after a new-server rotation:\n%s", p)
+	}
+}
+
+func TestRotateNewServerAllGroups(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	if err := w.engine().Rotate(context.Background(), RotateSel{NewServer: true}); err != nil {
+		t.Fatal(err)
+	}
+	st := w.loadState()
+	for g, want := range map[string]string{"germany": "DE#2", "netherlands": "NL#2"} {
+		if got := st.Groups[g].Logical; got != want || got == before.Groups[g].Logical {
+			t.Errorf("group %s is on %s (was %s), want %s", g, got, before.Groups[g].Logical, want)
+		}
+	}
+	w.assertConsistent()
+}
+
+func TestRotateNewServerNoOtherCandidate(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	w.setConfig(strings.Replace(testYAML, "max_load: 70", "max_load: 40", 1)) // only DE#1 (load 30) passes
+	w.s.calls = nil
+	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true})
+	if err == nil || !strings.Contains(err.Error(), "no server matches") || !strings.Contains(err.Error(), "other than DE#1") {
+		t.Fatalf("got %v", err)
+	}
+	if w.s.count("CreateCert") != 0 || w.s.count("UnitStop") != 0 || w.s.count("NetplanApply") != 0 {
+		t.Errorf("the failed lookup changed something: %v", w.s.calls)
+	}
+	after := w.loadState()
+	if after.Generation != before.Generation || after.Groups["germany"].Logical != "DE#1" {
+		t.Error("state changed")
+	}
+	for n, it := range before.Interfaces {
+		if after.Interfaces[n].CertSerial != it.CertSerial {
+			t.Errorf("%s changed", n)
+		}
+	}
+	w.setConfig(testYAML)
+	w.assertConsistent()
+}
+
+func TestRotateNewServerFailureRollsBack(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	before := w.loadState()
+	oldConf := map[string]string{"pvpn-de1": w.s.wg["pvpn-de1"], "pvpn-de2": w.s.wg["pvpn-de2"]}
+	w.s.probeFail["pvpn-de2"] = errors.New("probe: no traffic")
+	err := w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true})
+	if err == nil || !strings.Contains(err.Error(), "no traffic") {
+		t.Fatalf("got %v", err)
+	}
+	delete(w.s.probeFail, "pvpn-de2")
+	st := w.loadState()
+	if st.Groups["germany"].Logical != "DE#1" {
+		t.Fatalf("group moved despite the failure: %s", st.Groups["germany"].Logical)
+	}
+	for n, c := range oldConf {
+		if w.s.wg[n] != c || st.Interfaces[n].CertSerial != before.Interfaces[n].CertSerial || st.Interfaces[n].SourceIP != before.Interfaces[n].SourceIP {
+			t.Errorf("%s: not restored", n)
+		}
+	}
+	w.assertConsistent()
+}
+
+func TestRotateNewServerRejectsInterface(t *testing.T) {
+	w := newWorld(t)
+	w.mustReconcile()
+	err := w.engine().Rotate(context.Background(), RotateSel{Interface: "pvpn-de1", NewServer: true})
+	if err == nil || !strings.Contains(err.Error(), "--new-server cannot be used with --interface") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCrashDuringNewServerRotation(t *testing.T) {
+	runCrashMatrix(t, "rotate --new-server", func(w *world) { w.mustReconcile() },
+		func(w *world) error {
+			return w.engine().Rotate(context.Background(), RotateSel{Group: "germany", NewServer: true})
+		},
+		func(w *world) error { _, err := w.reconcile(); return err })
+}

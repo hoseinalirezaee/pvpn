@@ -46,6 +46,19 @@ func TestRotateSelectorsExclude(t *testing.T) {
 	}
 }
 
+func TestNewServerRules(t *testing.T) {
+	code, _, errb := runCLI("rotate", "--new-server", "--interface", "b")
+	if code != exitUsage || !strings.Contains(errb, "--new-server cannot be used with --interface") {
+		t.Errorf("got %d %q", code, errb)
+	}
+	if code, _, _ := runCLI("reconcile", "--new-server"); code != exitUsage {
+		t.Errorf("--new-server belongs to rotate only: %d", code)
+	}
+	if _, out, _ := runCLI("--help"); !strings.Contains(out, "--new-server") {
+		t.Error("usage does not mention --new-server")
+	}
+}
+
 func TestFeaturesText(t *testing.T) {
 	if features(0) != "-" || features(4|16) != "p2p" || features(1|2|4) != "secure_core,tor,p2p" {
 		t.Errorf("features: %q %q %q", features(0), features(4|16), features(7))

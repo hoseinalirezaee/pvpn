@@ -37,8 +37,9 @@ Commands:
   servers [--group G]           List the servers that match the group filters.
   status                        Show selections, interface health, certificate expiry, pending work.
   reconcile [--dry-run]         Make the managed resources match the config.
-  rotate [--group G | --interface I]
+  rotate [--group G | --interface I] [--new-server]
                                 Give interfaces a new key, certificate, and source address.
+                                With --new-server, each group also moves to another server (not with --interface).
   version                       Print the version.
 
 Every command accepts --config PATH (default ` + defaultConfig + `).
@@ -75,7 +76,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", defaultConfig, "config file")
 	var group, iface *string
-	var dry *bool
+	var dry, newServer *bool
 	switch cmd {
 	case "servers":
 		group = fs.String("group", "", "only this group")
@@ -84,6 +85,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "rotate":
 		group = fs.String("group", "", "rotate the interfaces of this group")
 		iface = fs.String("interface", "", "rotate this interface")
+		newServer = fs.Bool("new-server", false, "also move each group to another server that matches its filters")
 	case "login", "logout", "status":
 	default:
 		fmt.Fprintf(stderr, "pvpn: unknown command %q\n\n%s", cmd, usage)
@@ -98,6 +100,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if cmd == "rotate" && *group != "" && *iface != "" {
 		fmt.Fprintln(stderr, "pvpn: --group and --interface cannot be used together")
+		return exitUsage
+	}
+	if cmd == "rotate" && *newServer && *iface != "" {
+		fmt.Fprintln(stderr, "pvpn: --new-server cannot be used with --interface (a server belongs to a group)")
 		return exitUsage
 	}
 	if os.Geteuid() != 0 {
@@ -126,7 +132,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "reconcile":
 		err = a.reconcile(ctx, *dry)
 	case "rotate":
-		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface})
+		err = a.rotate(ctx, engine.RotateSel{Group: *group, Interface: *iface, NewServer: *newServer})
 	}
 	switch {
 	case err == nil:
