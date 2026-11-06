@@ -1,0 +1,82 @@
+name: release
+
+# Every push to main builds static Linux binaries and publishes a release.
+# The release tag is the short SHA (7 characters) of the pushed commit.
+# There is no concurrency group on purpose: each push has its own tag, so runs cannot collide.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          tag="${GITHUB_SHA::7}"
+          mkdir dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$tag" \
+              -o "dist/pvpn-linux-$arch" ./cmd/pvpn
+          done
+          (cd dist && sha256sum pvpn-linux-amd64 pvpn-linux-arm64 > SHA256SUMS)
+
+      - name: Notes
+        run: |
+          tag="${GITHUB_SHA::7}"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          {
+            git log -1 --format='%B'
+            printf 'Commit: %s/%s/commit/%s\n\n' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            cat <<EOF
+          Static Linux binaries. They have no dependencies.
+
+          | File | Architecture |
+          |---|---|
+          | pvpn-linux-amd64 | x86-64 |
+          | pvpn-linux-arm64 | ARM 64-bit |
+
+          Install (amd64 example):
+
+              curl -fLO ${url}/pvpn-linux-amd64
+              curl -fLO ${url}/SHA256SUMS
+              sha256sum --ignore-missing -c SHA256SUMS
+              sudo install -m 755 pvpn-linux-amd64 /usr/local/bin/pvpn
+
+          Test status: live tests ran on Ubuntu 26.04. The netplan output was checked on Ubuntu 22.04, 24.04, and 26.04.
+          TOTP login and certificate expiry were tested only against fakes.
+          EOF
+          } > notes.md
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_SHA::7}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A re-run of the same commit: replace the assets.
+            gh release upload "$tag" dist/* --clobber
+            exit 0
+          fi
+          gh release create "$tag" dist/* \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --notes-file notes.md
