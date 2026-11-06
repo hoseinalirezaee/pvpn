@@ -54,12 +54,9 @@ jobs:
           | pvpn-linux-amd64 | x86-64 |
           | pvpn-linux-arm64 | ARM 64-bit |
 
-          Install (amd64 example):
+          Install:
 
-              curl -fLO ${url}/pvpn-linux-amd64
-              curl -fLO ${url}/SHA256SUMS
-              sha256sum --ignore-missing -c SHA256SUMS
-              sudo install -m 755 pvpn-linux-amd64 /usr/local/bin/pvpn
+              sudo curl -fsSL "${url}/pvpn-linux-\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -o /usr/local/bin/pvpn && sudo chmod 755 /usr/local/bin/pvpn
 
           Test status: live tests ran on Ubuntu 26.04. The netplan output was checked on Ubuntu 22.04, 24.04, and 26.04.
           TOTP login and certificate expiry were tested only against fakes.
